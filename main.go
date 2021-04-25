@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"strconv"
 
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
@@ -19,21 +18,11 @@ type Card struct {
 	Prompt string `json:"prompt"`
 }
 
+// Take a full screenshot of the page and override the viewport to match the required card dimensions
 func fullScreenshot(urlstr string, quality int64, res *[]byte) chromedp.Tasks {
 	return chromedp.Tasks{
 		chromedp.Navigate(urlstr),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// get layout metrics
-			/*
-				_, _, cssContentSize, err := page.GetLayoutMetrics().Do(ctx)
-				if err != nil {
-					return err
-				}
-			*/
-
-			//width, height := int64(math.Ceil(cssContentSize.Width)), int64(math.Ceil(cssContentSize.Height))
-
-			// force viewport emulation
 			err := emulation.SetDeviceMetricsOverride(597, 1122, 0, false).
 				WithScreenOrientation(&emulation.ScreenOrientation{
 					Type:  emulation.OrientationTypePortraitPrimary,
@@ -62,15 +51,8 @@ func fullScreenshot(urlstr string, quality int64, res *[]byte) chromedp.Tasks {
 	}
 }
 
-// elementScreenshot takes a screenshot of a specific element.
-func elementScreenshot(urlstr, sel string, res *[]byte) chromedp.Tasks {
-	return chromedp.Tasks{
-		chromedp.Navigate(urlstr),
-		chromedp.Screenshot(sel, res, chromedp.NodeVisible),
-	}
-}
-
-func screenshot(fname string) {
+// Take a screenshot of the inputFile and save to the outputFile
+func screenshot(inputFile, outputFile string) {
 	// create context
 	ctx, cancel := chromedp.NewContext(
 		context.Background(),
@@ -81,58 +63,77 @@ func screenshot(fname string) {
 	// capture screenshot of an element
 	var buf []byte
 
-	if err := chromedp.Run(ctx, fullScreenshot(`file:///home/csthompson/workspace/go/src/github.com/csthompson/cardbuilder/render.html`, 90, &buf)); err != nil {
+	if err := chromedp.Run(ctx, fullScreenshot(inputFile, 0, &buf)); err != nil {
 		log.Fatal(err)
 	}
-	if err := ioutil.WriteFile(fname, buf, 0o644); err != nil {
+	if err := ioutil.WriteFile(outputFile, buf, 0o644); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func main() {
 
-	//Read the cards file
-	jsonFile, err := os.Open("cards.json")
+	// Open the cards file
+	inputFile, err := os.Open("cards.json")
 	if err != nil {
 		fmt.Println(err)
 	}
-	defer jsonFile.Close()
+	defer inputFile.Close()
 
-	// read our opened jsonFile as a byte array.
-	byteValue, _ := ioutil.ReadAll(jsonFile)
+	// Read the cards file into bytes
+	byteValue, _ := ioutil.ReadAll(inputFile)
 
-	// we initialize our Users array
+	// Initialize the slice of cards that will be printed
 	var cards []Card
 
-	// we unmarshal our byteArray which contains our
-	// jsonFile's content into 'users' which we defined above
+	// Unmarshal the input file into a slice of Card objects
 	json.Unmarshal(byteValue, &cards)
 
-	//Read the template file
-	b, err := ioutil.ReadFile("card.html") // just pass the file name
+	// Read the card template file
+	b, err := ioutil.ReadFile("card.html")
 	if err != nil {
 		fmt.Print(err)
 	}
 
-	tmpl := string(b) // convert content to a 'string'
+	// Convert the template to a string
+	tmpl := string(b)
 
+	// Initialize a new liquid templating engine
 	engine := liquid.NewEngine()
 
-	fmt.Println(cards)
+	// Get the current working directory
+	path, err := os.Getwd()
+	if err != nil {
+		log.Println(err)
+	}
 
+	// The name of the output file to screenshot in Chrome
+	renderFile := fmt.Sprintf(`file://%s/render.html`, path)
+
+	// Iterate over the slice of cards
 	for i, c := range cards {
 
+		// Create a binding for the card object
 		bindings := map[string]interface{}{
 			"card": c,
 		}
+
+		// Inject the bindings to the liquid engine and use the template from the card.html file
 		out, err := engine.ParseAndRenderString(tmpl, bindings)
 		if err != nil {
 			log.Fatalln(err)
 		}
-		d1 := []byte(out)
-		fname := "./output/render_" + strconv.Itoa(i) + ".png"
-		fmt.Println(fname)
-		ioutil.WriteFile("./render.html", d1, 0644)
-		screenshot(fname)
+
+		// Convert the result from the template to bytes so that it can be written to a file
+		outBytes := []byte(out)
+
+		// Create a filename for the screenshot
+		fname := fmt.Sprintf("./output/render_%d.png", i)
+
+		// Write the output from the template to a file
+		ioutil.WriteFile("./render.html", outBytes, 0644)
+
+		// Use headless Chrome to open the HTML template, take a screenshot, and save to the render file
+		screenshot(renderFile, fname)
 	}
 }
